@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"log"
@@ -9,9 +8,15 @@ import (
 
 	"github.com/antchfx/htmlquery"
 	"github.com/antchfx/xpath"
+	"github.com/davecgh/go-spew/spew"
 	"github.com/spf13/pflag"
 	"golang.org/x/net/html"
 )
+
+var useDump bool
+var dumpState spew.ConfigState
+var firstN int
+var printNumber bool
 
 func compileExprs(exprStrings ...string) ([]*xpath.Expr, error) {
 	exprs := make([]*xpath.Expr, len(exprStrings))
@@ -73,7 +78,19 @@ func printNodes(w io.Writer, nodes []*html.Node) error {
 	return nil
 }
 
+func dump(w io.Writer, node *html.Node) error {
+	dumpState.Fdump(w, node)
+	_, err := fmt.Println(w)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func printNode(w io.Writer, node *html.Node) error {
+	if useDump {
+		return dump(w, node)
+	}
 	err := html.Render(w, node)
 	if err != nil {
 		return err
@@ -85,7 +102,36 @@ func printNode(w io.Writer, node *html.Node) error {
 	return nil
 }
 
+func min(x, y int) int {
+	if x < y {
+		return x
+	}
+	return y
+}
+
 func parse() error {
+	pflag.StringVar(&dumpState.Indent, "dump-indent", "  ",
+		"spew.ConfigState.Indent")
+	pflag.IntVar(&dumpState.MaxDepth, "dump-max-depth", 0,
+		"spew.ConfigState.MaxDepth")
+	pflag.BoolVar(&dumpState.DisableMethods, "dump-disable-methods", false,
+		"spew.ConfigState.DisableMethods")
+	pflag.BoolVar(&dumpState.DisablePointerMethods, "dump-disable-pointer-methods", false,
+		"spew.ConfigState.DisablePointerMethods")
+	pflag.BoolVar(&dumpState.DisablePointerAddresses, "dump-disable-pointer-addresses", false,
+		"spew.ConfigState.DisablePointerAddresses")
+	pflag.BoolVar(&dumpState.DisableCapacities, "dump-disable-capacities", false,
+		"spew.ConfigState.DisableCapacities")
+	pflag.BoolVar(&dumpState.ContinueOnMethod, "dump-continue-on-method", false,
+		"spew.ConfigState.ContinueOnMethod")
+	pflag.BoolVar(&dumpState.SortKeys, "dump-sort-keys", false,
+		"spew.ConfigState.SortKeys")
+	pflag.BoolVar(&dumpState.SpewKeys, "dump-spew-keys", false,
+		"spew.ConfigState.SpewKeys")
+	pflag.BoolVarP(&useDump, "dump", "d", false, "dump node")
+	pflag.IntVarP(&firstN, "n", "n", -1, "select first n node(s)")
+	pflag.BoolVar(&printNumber, "print-number", false,
+		"print the number of the matched nodes")
 	pflag.Parse()
 	docNode, err := htmlquery.Parse(os.Stdin)
 	if err != nil {
@@ -96,16 +142,20 @@ func parse() error {
 	if err != nil {
 		return err
 	}
-	var buf bytes.Buffer
-	buf.Grow(4096)
+	if firstN >= 0 {
+		exprs = exprs[:min(firstN, len(exprs))]
+	}
+	if printNumber {
+		fmt.Println(len(exprs))
+		return nil
+	}
 	for _, expr := range exprs {
 		nodes := find(docNode, expr)
-		err = printNodes(&buf, nodes)
+		err = printNodes(os.Stdout, nodes)
 		if err != nil {
 			return err
 		}
 	}
-	buf.WriteTo(os.Stdout)
 	return nil
 }
 
